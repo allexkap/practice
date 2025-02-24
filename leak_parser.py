@@ -115,8 +115,6 @@ def parse_data(path: Path, params: Params):
 def main(path: str):
     params = Params(AI())
     tables = parse_data(Path(path), params)
-
-    tables = parse_data(Path(path), params)
     for table in tables:
         indexes = params.ai.request(
             table.get_sample(), needed_columns=("LastName", "Email", "Phones")
