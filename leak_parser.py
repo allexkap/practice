@@ -109,12 +109,13 @@ def parse_data(path: Path, params: Params):
         return parser.parse_csv()
     elif path.suffix == ".sql":
         return parser.parse_sql()
-    else:
-        raise ValueError("Unknown file type")
+    raise ValueError("Unknown file type")
 
 
-def main(path: str, need_params: bool = False):
-    params = Params(AI()) if need_params else None
+def main(path: str):
+    params = Params(AI())
+    tables = parse_data(Path(path), params)
+
     tables = parse_data(Path(path), params)
     for table in tables:
         indexes = params.ai.request(
@@ -125,4 +126,4 @@ def main(path: str, need_params: bool = False):
 
 
 if __name__ == "__main__":
-    main("partselect.ru.csv", need_params=True)
+    main("partselect.ru.csv")
