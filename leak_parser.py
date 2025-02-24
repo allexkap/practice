@@ -29,7 +29,7 @@ class Table:
             or len(self.data) != len(rhs.data)
             or self.meta != rhs.meta
         ):
-            raise ValueError("nelzya")
+            raise ValueError("Different tables structure")
         return Table(self.name, self.data + rhs.data, self.meta)
 
 
