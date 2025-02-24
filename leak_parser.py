@@ -51,57 +51,72 @@ class Params:
     # и другое если кому то что то понадобится, расширяемость как никак
 
 
-def parse_csv(path: Path, params: Params) -> list[Table]:
-    with open(path) as file:
-        first_line = file.readline()
-        delim = max((first_line.count(d), d) for d in ",;\t")[1]
-        file.seek(0)
-        reader = csv.reader(file, delimiter=delim)
-        meta = list(next(reader))
-        content = [[*map(str.strip, lines)] for lines in reader]
-    return [Table(path.name, content, meta)]
+@dataclass
+class Parser:
+    path: Path  # путь к файлу
+    params: Params  # параметры парсера
+    encoding: str = "utf-8"  # кодировка файла
+
+    def parse_string(self, string: str):
+        string = string.strip()
+        try:
+            if string[0] in "'\"`":
+                string = string[1:-1]
+        except IndexError:
+            return None
+        if string == "NULL":
+            return None
+        return string
+
+    def parse_csv(self) -> list[Table]:
+        with open(self.path, encoding=self.encoding) as file:
+            first_line = file.readline()
+            delim = max((first_line.count(d), d) for d in ",;\t")[1]
+            file.seek(0)
+            reader = csv.reader(file, delimiter=delim)
+            meta = list(next(reader))
+            content = [[*map(self.parse_string, lines)] for lines in reader]
+        return [Table(self.path.name, content, meta)]
+
+    def get_table_info(self, table: list[str]) -> Table:
+        first_line = table[0].strip()
+        db_name = first_line[len("INSERT INTO") : first_line.find("(")]
+        db_name = self.parse_string(db_name)
+        meta = first_line[first_line.find("(") + 1 : first_line.find(")")]
+        meta = [self.parse_string(elem) for elem in meta.split(",")]
+        data = table[1:]
+        data = [[*map(self.parse_string, lines[1:-1].split(","))] for lines in data]
+        return Table(db_name, data, meta)
+
+    def parse_sql(self) -> list[Table]:
+        with open(self.path, encoding=self.encoding) as file:
+            data = file.readlines()
+            table_start_indexes = [
+                i
+                for i, line in enumerate(data)
+                if line.strip().startswith("INSERT INTO")
+            ] + [len(data)]
+            tables = [
+                self.get_table_info(data[i:j])
+                for i, j in zip(table_start_indexes, table_start_indexes[1:])
+            ]
+        return tables
 
 
-def parse_string(string: str):
-    string = string.strip()
-    try:
-        if string[0] in "'\"`":
-            string = string[1:-1]
-    except IndexError:
-        return None
-    if string == "NULL":
-        return None
-    return string
+def parse_data(path: Path, params: Params):
+    parser = Parser(path, params)
+    if path.suffix == ".csv":
+        return parser.parse_csv()
+    elif path.suffix == ".sql":
+        return parser.parse_sql()
 
 
-def get_table_info(table: list[str]) -> Table:
-    first_line = table[0].strip()
-    db_name = first_line[len("INSERT INTO ") : first_line.find("(")]
-    db_name = parse_string(db_name)
-    meta = first_line[first_line.find("(") + 1 : first_line.find(")")]
-    meta = [parse_string(elem) for elem in meta.split(",")]
-    data = table[1:]
-    data = [[*map(parse_string, lines[1:-1].split(","))] for lines in data]
-    return Table(db_name, data, meta)
-
-
-def parse_sql(path: Path, file_encoding: str = "utf8") -> list[Table]:
-    with open(path, encoding=file_encoding) as file:
-        data = file.readlines()
-        table_start_indexes = [
-            i for i, line in enumerate(data) if line.strip().startswith("INSERT INTO")
-        ] + [len(data)]
-        tables = [
-            get_table_info(data[i:j])
-            for i, j in zip(table_start_indexes, table_start_indexes[1:])
-        ]
-    return tables
-
-
-params = Params(AI())
-table = parse_csv(Path("./res/partselect.ru.csv"), params)[0]
-indexes = params.ai.request(
-    table.get_sample(), needed_columns=("LastName", "Email", "Phones")
-)
-for row in table.filtred(indexes):
-    print(row)
+def main():
+    params = Params(AI())
+    tables = parse_data(Path("./res/partselect.ru.csv"), params)
+    for table in tables:
+        indexes = params.ai.request(
+            table.get_sample(), needed_columns=("LastName", "Email", "Phones")
+        )
+        for row in table.filtred(indexes):
+            print(row)
