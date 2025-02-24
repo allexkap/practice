@@ -81,8 +81,8 @@ def get_table_info(table: list[str]) -> Table:
     meta = first_line[first_line.find("(") + 1 : first_line.find(")")]
     meta = [parse_string(elem) for elem in meta.split(",")]
     data = table[1:]
-    content = [[*map(parse_string, lines[1:-1].split(","))] for lines in data]
-    return Table(content, meta, db_name)
+    data = [[*map(parse_string, lines[1:-1].split(","))] for lines in data]
+    return Table(db_name, data, meta)
 
 
 def parse_sql(path: Path, file_encoding: str = "utf8") -> list[Table]:
