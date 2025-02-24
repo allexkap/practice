@@ -62,6 +62,43 @@ def parse_csv(path: Path, params: Params) -> list[Table]:
     return [Table(path.name, content, meta)]
 
 
+def parse_string(string: str):
+    string = string.strip()
+    try:
+        if string[0] in "'\"`":
+            string = string[1:-1]
+    except IndexError:
+        return None
+    if string == "NULL":
+        return None
+    return string
+
+
+def get_table_info(table: list[str]) -> Table:
+    first_line = table[0].strip()
+    db_name = first_line[len("INSERT INTO ") : first_line.find("(")]
+    db_name = parse_string(db_name)
+    meta = first_line[first_line.find("(") + 1 : first_line.find(")")]
+    meta = [parse_string(elem) for elem in meta.split(",")]
+    data = table[1:]
+    content = [[*map(parse_string, lines[1:-1].split(","))] for lines in data]
+    return Table(content, meta, db_name)
+
+
+def parse_sql(path: Path, file_encoding: str = "utf8") -> list[Table]:
+    with open(path, encoding=file_encoding) as file:
+        data = file.readlines()
+        table_start_indexes = [
+            i for i, line in enumerate(data) if line.strip().startswith("INSERT INTO")
+        ] + [len(data)]
+        tables = [
+            get_table_info(data[i:j])
+            for i, j in zip(table_start_indexes, table_start_indexes[1:])
+        ]
+    return tables
+
+
+
 params = Params(AI())
 table = parse_csv(Path("./res/partselect.ru.csv"), params)[0]
 indexes = params.ai.request(
