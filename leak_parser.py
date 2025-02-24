@@ -7,14 +7,14 @@ from pathlib import Path
 
 @dataclass
 class Table:
-    content: list
+    data: list
     meta: tuple
 
 
 def parse_csv(path: Path) -> list[Table]:
     with open(path) as file:
         first_line = file.readline()
-        delim = max((first_line.count(d), d) for d in ',;\t')[1]
+        delim = max((first_line.count(d), d) for d in ",;\t")[1]
         file.seek(0)
         reader = csv.reader(file, delimiter=delim)
         meta = tuple(next(reader))
@@ -24,21 +24,20 @@ def parse_csv(path: Path) -> list[Table]:
 
 
 def get_sample(table: Table, n: int = 10):
-    rows_count = len(table.content)
+    rows_count = len(table.data)
     content = [
-        table.content[i]
-        for i in random.sample(range(0, rows_count), min(rows_count, n))
+        table.data[i] for i in random.sample(range(0, rows_count), min(rows_count, n))
     ]
     return Table(content, table.meta)
 
 
 def reorder_columns(table: Table, indexes):
-    content = [[row[i] if i != -1 else '' for i in indexes] for row in table.content]
+    content = [[row[i] if i != -1 else "" for i in indexes] for row in table.data]
     return Table(content, table.meta)
 
 
 def save_to_db(path: Path, table: Table):
-    print(*table.content, sep='\n')
+    print(*table.data, sep="\n")
 
 
 def ai_mock(table: Table, needed_columns: tuple) -> list[int]:
@@ -51,8 +50,8 @@ def ai(table: Table, needed_columns: tuple) -> list[int]:
     return ai_mock(table, needed_columns)
 
 
-table = parse_csv(Path('./res/partselect.ru.csv'))[0]
+table = parse_csv(Path("./res/partselect.ru.csv"))[0]
 part = get_sample(table)
-indexe = ai(part, needed_columns=('LastName', 'Email', 'Phones'))
+indexe = ai(part, needed_columns=("LastName", "Email", "Phones"))
 out_table = reorder_columns(table, indexe)
-save_to_db(Path('out.db'), out_table)
+save_to_db(Path("out.db"), out_table)
