@@ -98,7 +98,6 @@ def parse_sql(path: Path, file_encoding: str = "utf8") -> list[Table]:
     return tables
 
 
-
 params = Params(AI())
 table = parse_csv(Path("./res/partselect.ru.csv"), params)[0]
 indexes = params.ai.request(
