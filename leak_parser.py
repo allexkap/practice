@@ -109,14 +109,20 @@ def parse_data(path: Path, params: Params):
         return parser.parse_csv()
     elif path.suffix == ".sql":
         return parser.parse_sql()
+    else:
+        raise ValueError("Unknown file type")
 
 
-def main():
-    params = Params(AI())
-    tables = parse_data(Path("./res/partselect.ru.csv"), params)
+def main(path: str, need_params: bool = False):
+    params = Params(AI()) if need_params else None
+    tables = parse_data(Path(path), params)
     for table in tables:
         indexes = params.ai.request(
             table.get_sample(), needed_columns=("LastName", "Email", "Phones")
         )
         for row in table.filtred(indexes):
             print(row)
+
+
+if __name__ == "__main__":
+    main("partselect.ru.csv", need_params=True)
