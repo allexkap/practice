@@ -107,7 +107,7 @@ def parse_data(path: Path, params: Params):
     parser = Parser(path, params)
     if path.suffix == ".csv":
         return parser.parse_csv()
-    elif path.suffix == ".sql":
+    if path.suffix == ".sql":
         return parser.parse_sql()
     raise ValueError("Unknown file type")
 
