@@ -22,4 +22,4 @@ jobs:
       run: |
         files=$(git ls-files '*.py')
         pylint --disable=C $files
-        mypy --allow-redefinition $files
+        mypy -v --allow-redefinition $files
