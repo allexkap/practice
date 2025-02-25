@@ -33,16 +33,23 @@ class Table:
         return Table(self.name, self.data + rhs.data, self.meta)
 
 
-def ai_mock(table: Table, needed_columns: tuple) -> list[int]:
-    return [
-        (table.meta.index(col) if col in table.meta else -1) for col in needed_columns
-    ]
+def ai_mock(table: Table, needed_columns: tuple) -> dict[int | None]:
+    return {
+        random.randint(0, len(table.meta)): col if random.randint(0, 3) == 0 else None
+        for col in needed_columns
+    }
 
 
 @dataclass
 class AI:
-    def request(self, table: Table, needed_columns: tuple) -> list[int]:
+
+    def request_columns_order(
+        self, table: Table, needed_columns: tuple
+    ) -> dict[int | None, Any]:
         return ai_mock(table, needed_columns)
+
+    def request_columns_names(self, table: Table) -> bool:
+        return True
 
 
 @dataclass
@@ -76,7 +83,10 @@ class Parser:
             reader = csv.reader(file, delimiter=delim)
             meta = list(next(reader))
             content = [[*map(self.parse_string, lines)] for lines in reader]
-        return [Table(self.path.name, content, meta)]
+            result = Table(self.path.name, content, meta)
+            if not self.params.ai.request_columns_names(result):
+                result.meta = [str(i) for i in range(len(result.data[0]))]
+        return [result]
 
     def get_table_info(self, table: list[str]) -> Table:
         first_line = table[0].strip()
@@ -112,15 +122,38 @@ def parse_data(path: Path, params: Params):
     raise ValueError("Unknown file type")
 
 
+def insret_into_db(obj) -> None:
+    print(obj["params"], obj["table"].meta)
+
+
 def main(path: str):
     params = Params(AI())
     tables = parse_data(Path(path), params)
-    for table in tables:
-        indexes = params.ai.request(
-            table.get_sample(), needed_columns=("LastName", "Email", "Phones")
+
+    indexes = [
+        *map(
+            lambda table: {
+                "table": table,
+                "params": params.ai.request_columns_order(
+                    table,
+                    needed_columns=(
+                        "LastName",
+                        "FirstName",
+                        "SecondName",
+                        "Email",
+                        "PhoneNumber",
+                        "HomeAdress",
+                        "WorkAdress",
+                        "Login",
+                        "Password",
+                    ),
+                ),
+            },
+            tables,
         )
-        for row in table.filtred(indexes):
-            print(row)
+    ]
+    for obj in indexes:
+        insret_into_db(obj)
 
 
 if __name__ == "__main__":
