@@ -49,7 +49,7 @@ class AI:
         return ai_mock(table, needed_columns)
 
     def request_columns_names(self, table: Table) -> bool:
-        return True
+        return table is None
 
 
 @dataclass
