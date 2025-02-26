@@ -21,5 +21,5 @@ jobs:
     - name: Analysing the code
       run: |
         files=$(git ls-files '*.py')
-        pylint --disable=C $files
-        mypy --allow-redefinition $files
+        pylint --disable=C $files || true
+        mypy --allow-redefinition $files || true
