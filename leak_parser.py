@@ -1,5 +1,6 @@
 import argparse
 import csv
+import logging
 import random
 import sqlite3
 import sys
@@ -7,10 +8,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
-import logging
-import sqlparse
 
+import sqlparse
 from openai import APIError, OpenAI
+from sqlparse.sql import Identifier, Parenthesis
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -99,6 +100,8 @@ class AI:
 
     @staticmethod
     def toCSV(table: Table):
+        if len(table.data) > 100: # ._.
+            table = table.get_sample(10)
         csv_data = ""
         for row in table.data:
             csv_data += ",".join(map(str, row)) + "\n"
@@ -207,13 +210,13 @@ class AIMock(AI):
         pass
 
     def request_columns_order(
-            self, table: Table, needed_columns: tuple
+            self, table: Table, needs: tuple
     ) -> dict[int | None, Any]:
         return {
             random.randint(0, len(table.meta)): (
                 col if random.randint(0, 3) == 0 else None
             )
-            for col in needed_columns
+            for col in needs
         }
 
     def request_columns_names(self, table: Table) -> bool:
@@ -229,11 +232,14 @@ class DB:
 
 
 class DBMock(DB):
-    def __init__(self, path: Path = '') -> None:
+    def __init__(self, path: Path = ':memory:') -> None: # type: ignore
         super().__init__(path)
 
     def insert(self, obj):
-        print(obj["params"], obj["table"].meta)
+        print(f"params: {obj['params']}")
+        print(f"meta: {obj['table'].meta}")
+        for v in [obj['table'].data[i] for i in range(0,5)]:
+            print(v)
 
 
 @dataclass
@@ -273,7 +279,7 @@ def get_table_info(table: List[str]) -> Table:
     meta = [parse_string(elem) for elem in meta.split(",")]
     data = table[1:]
     data = [[*map(parse_string, lines[1:-1].split(","))] for lines in data]
-    return Table(db_name, data, meta)
+    return Table(db_name, data, meta) # type: ignore
 
 
 @dataclass
@@ -343,28 +349,62 @@ class Parser:
         return tables
 
     def parse_sql_experimental(self) -> List[Table]:
-        """Method to parse SQL INSERT statements.
-
-        Returns:
-            list[Table]: A list of Table instances.
-
-        Raises:
-            ValueError: If file cannot be read or parsed.
-        """
+        """Parse SQL INSERT statements using sqlparse."""
         try:
             with open(self.path, encoding=self.params.encoding) as file:
                 data = file.read()
+
             statements = sqlparse.split(data)
             tables = []
+
             for stmt in statements:
-                parsed = sqlparse.parse(stmt)[0]
-                if parsed.get_type() == "INSERT":
-                    db_name = parsed[2].value.strip()
-                    meta = [t.value for t in parsed[3].tokens if isinstance(t, sqlparse.sql.Identifier)]
-                    values = [v.value.split(",") for v in parsed.tokens[-1].tokens if v.value.startswith("(")]
-                    data = [[parse_string(v.strip()) for v in row] for row in values]
-                    tables.append(Table(db_name, data, meta))
+                parsed = sqlparse.parse(stmt)
+
+                if not parsed:
+                    continue
+
+                parsed_stmt = parsed[0]
+
+                # Check if statement is an INSERT
+                if parsed_stmt.get_type() != "INSERT":
+                    continue
+
+                tokens = [t for t in parsed_stmt.tokens if not t.is_whitespace and not t.is_comment]
+
+                # Locate the table name
+                table_name = None
+                for token in tokens:
+                    if isinstance(token, Identifier):
+                        table_name = token.get_real_name()
+                        break
+
+                if not table_name:
+                    raise ValueError("Could not determine table name in INSERT statement.")
+
+                # Locate column definitions (optional in INSERT)
+                columns = []
+                for token in tokens:
+                    if isinstance(token, Parenthesis) and "(" in token.value and ")" in token.value:
+                        columns = [col.strip() for col in token.value.strip("()").split(",")]
+                        break  # Stop after finding the first set of parentheses (column names)
+
+                # Locate values (VALUES (...), (...))
+                values = []
+                for token in tokens:
+                    if isinstance(token, Parenthesis) and token.value.upper().startswith(
+                            "("):  # Values should be inside parentheses
+                        row_values = token.value.strip("()").split(",")
+                        row_values = [parse_string(v.strip()) for v in row_values]  # Clean up values
+                        values.append(row_values)
+
+                if not values:
+                    raise ValueError("No VALUES found in INSERT statement.")
+
+                # Append the extracted data as a Table object
+                tables.append(Table(table_name, values, columns))
+
             return tables
+
         except FileNotFoundError:
             raise ValueError(f"File not found: {self.path}")
         except Exception as e:
@@ -457,7 +497,7 @@ def process_file(path: Path, params: Params):
             lambda table: {
                 "table": table,
                 "params": params.ai.request_columns_order(
-                    table,
+                    table.get_sample(10),
                     needs=params.needs,
                 ),
             },
@@ -471,7 +511,7 @@ def process_file(path: Path, params: Params):
 def main():
     args = parse_args()
     db = DB(args.output_db) if args.output_db else DBMock()
-    ai = AI(args.output_db) if args.api_key else AIMock()
+    ai = AI(args.api_key) if args.api_key else AIMock()
     needs = tuple(args.needs)
     experiments = args.experiments
     params = Params(ai, db, needs, experiments)
