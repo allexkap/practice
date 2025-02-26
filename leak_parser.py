@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
 import logging
-
 import sqlparse
+
 from openai import APIError, OpenAI
 
 # Configure logging
