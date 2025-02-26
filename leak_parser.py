@@ -99,6 +99,8 @@ class AI:
 
     @staticmethod
     def toCSV(table: Table):
+        if len(table.data) > 100: # ._.
+            table = table.get_sample(10)
         csv_data = ""
         for row in table.data:
             csv_data += ",".join(map(str, row)) + "\n"
@@ -207,13 +209,13 @@ class AIMock(AI):
         pass
 
     def request_columns_order(
-            self, table: Table, needed_columns: tuple
+            self, table: Table, needs: tuple
     ) -> dict[int | None, Any]:
         return {
             random.randint(0, len(table.meta)): (
                 col if random.randint(0, 3) == 0 else None
             )
-            for col in needed_columns
+            for col in needs
         }
 
     def request_columns_names(self, table: Table) -> bool:
@@ -229,7 +231,7 @@ class DB:
 
 
 class DBMock(DB):
-    def __init__(self, path: Path = ':memory:') -> None:
+    def __init__(self, path: Path = ':memory:') -> None: # type: ignore
         super().__init__(path)
 
     def insert(self, obj):
@@ -273,7 +275,7 @@ def get_table_info(table: List[str]) -> Table:
     meta = [parse_string(elem) for elem in meta.split(",")]
     data = table[1:]
     data = [[*map(parse_string, lines[1:-1].split(","))] for lines in data]
-    return Table(db_name, data, meta)
+    return Table(db_name, data, meta) # type: ignore
 
 
 @dataclass
@@ -457,7 +459,7 @@ def process_file(path: Path, params: Params):
             lambda table: {
                 "table": table,
                 "params": params.ai.request_columns_order(
-                    table,
+                    table.get_sample(10),
                     needs=params.needs,
                 ),
             },
