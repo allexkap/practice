@@ -231,11 +231,24 @@ class DB:
 
 
 class DBMock(DB):
-    def __init__(self, path: Path = ':memory:') -> None: # type: ignore
+    def __init__(self, path: Path = ":memory:") -> None:  # type: ignore
         super().__init__(path)
 
     def insert(self, obj):
-        print(obj["params"], obj["table"].meta)
+        needed_columns = obj.get("params")
+        table = obj.get("table").get_sample(50)
+        columns = dict()
+        for column_name, column_number in zip(
+            needed_columns.keys(), needed_columns.values()
+        ):
+            if column_number >= 0:
+                columns[column_number] = column_name
+        shortened_table = Table(
+            table.name,
+            [list(table.filtered(columns.keys())) for i in range(len(table.data))],
+            columns.values(),
+        )
+        print(shortened_table)
 
 
 @dataclass
