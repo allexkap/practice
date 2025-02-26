@@ -112,7 +112,7 @@ class AI:
 
     def request_columns_order(
             self, table: Table, needs: tuple
-    ) -> dict[int | None, Any]:
+    ):
         csv_str = self.toCSV(table)
         # print("Sample:\n", csv_str)
         prompt = self.task_request_columns_order(needs, csv_str)
@@ -210,7 +210,7 @@ class AIMock(AI):
 
     def request_columns_order(
             self, table: Table, needs: tuple
-    ) -> dict[int | None, Any]:
+    ) :
         return {
             random.randint(0, len(table.meta)): (
                 col if random.randint(0, 3) == 0 else None
