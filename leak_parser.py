@@ -359,56 +359,138 @@ class Parser:
 
             for stmt in statements:
                 parsed = sqlparse.parse(stmt)
-
                 if not parsed:
                     continue
 
                 parsed_stmt = parsed[0]
-
                 # Check if statement is an INSERT
                 if parsed_stmt.get_type() != "INSERT":
                     continue
 
-                tokens = [t for t in parsed_stmt.tokens if not t.is_whitespace and not t.is_comment]
-
-                # Locate the table name
+                # Find the table name
                 table_name = None
-                for token in tokens:
-                    if isinstance(token, Identifier):
-                        table_name = token.get_real_name()
-                        break
+                for i, token in enumerate(parsed_stmt.tokens):
+                    if token.ttype is None and token.value.upper() == "INTO":
+                        # Table name should follow the INTO keyword
+                        for j in range(i + 1, len(parsed_stmt.tokens)):
+                            if isinstance(parsed_stmt.tokens[j], Identifier):
+                                table_name = parsed_stmt.tokens[j].get_real_name()
+                                break
+                        if table_name:
+                            break
 
                 if not table_name:
-                    raise ValueError("Could not determine table name in INSERT statement.")
+                    continue
 
-                # Locate column definitions (optional in INSERT)
+                # Find column names
                 columns = []
-                for token in tokens:
-                    if isinstance(token, Parenthesis) and "(" in token.value and ")" in token.value:
-                        columns = [col.strip() for col in token.value.strip("()").split(",")]
-                        break  # Stop after finding the first set of parentheses (column names)
+                for token in parsed_stmt.tokens:
+                    if isinstance(token, Parenthesis):
+                        # First parenthesis after table name should contain column names
+                        col_content = token.value.strip("()")
+                        # Handle quoted identifiers
+                        columns = []
+                        in_quotes = False
+                        quote_char = None
+                        current_col = ""
 
-                # Locate values (VALUES (...), (...))
-                values = []
-                for token in tokens:
-                    if isinstance(token, Parenthesis) and token.value.upper().startswith(
-                            "("):  # Values should be inside parentheses
-                        row_values = token.value.strip("()").split(",")
-                        row_values = [parse_string(v.strip()) for v in row_values]  # Clean up values
-                        values.append(row_values)
+                        for char in col_content:
+                            if char in ['"', "'"]:
+                                if not in_quotes:
+                                    in_quotes = True
+                                    quote_char = char
+                                elif char == quote_char:
+                                    in_quotes = False
+                                    quote_char = None
+                                current_col += char
+                            elif char == "," and not in_quotes:
+                                columns.append(current_col.strip().strip('"\''))
+                                current_col = ""
+                            else:
+                                current_col += char
 
-                if not values:
-                    raise ValueError("No VALUES found in INSERT statement.")
+                        if current_col:
+                            columns.append(current_col.strip().strip('"\''))
+                        break
 
-                # Append the extracted data as a Table object
-                tables.append(Table(table_name, values, columns))
+                # Find VALUES token and parse value rows
+                values_section = False
+                values_rows = []
+                current_row = []
+                in_row_parenthesis = False
 
-            return tables
+                for token in parsed_stmt.tokens:
+                    if token.value.upper() == "VALUES":
+                        values_section = True
+                        continue
 
+                    if not values_section:
+                        continue
+
+                    if isinstance(token, Parenthesis) and token.value.startswith("("):
+                        # Parse individual values in this row
+                        row_content = token.value.strip("()")
+                        row_values = []
+                        current_value = ""
+                        in_quotes = False
+                        quote_char = None
+
+                        for char in row_content:
+                            if char in ['"', "'"]:
+                                if not in_quotes:
+                                    in_quotes = True
+                                    quote_char = char
+                                elif char == quote_char:
+                                    in_quotes = False
+                                    quote_char = None
+                                current_value += char
+                            elif char == "," and not in_quotes:
+                                row_values.append(self._parse_value(current_value.strip()))
+                                current_value = ""
+                            else:
+                                current_value += char
+
+                        if current_value:
+                            row_values.append(self._parse_value(current_value.strip()))
+
+                        values_rows.append(row_values)
+
+                if table_name and values_rows:
+                    tables.append(Table(table_name, values_rows, columns))
+                return tables
         except FileNotFoundError:
             raise ValueError(f"File not found: {self.path}")
         except Exception as e:
             raise ValueError(f"SQL parsing error: {e}")
+
+    @staticmethod
+    def _parse_value(value_str):
+        """Parse a SQL value into the appropriate Python type."""
+        # Handle NULL values
+        if value_str.upper() == "NULL":
+            return None
+
+        # Handle string literals
+        if (value_str.startswith("'") and value_str.endswith("'")) or \
+                (value_str.startswith('"') and value_str.endswith('"')):
+            return value_str[1:-1]
+
+        # Handle boolean values
+        if value_str.upper() in ["TRUE", "T"]:
+            return True
+        if value_str.upper() in ["FALSE", "F"]:
+            return False
+
+        # Handle numeric values
+        try:
+            if "." in value_str:
+                return float(value_str)
+            return int(value_str)
+        except ValueError:
+            pass
+
+        # Return as is for other cases
+        return value_str
 
 
 def parse_data(path: Path, params: Params):
