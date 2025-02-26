@@ -1,5 +1,6 @@
 import argparse
 import csv
+import logging
 import random
 import sqlite3
 import sys
@@ -7,9 +8,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
-import logging
-import sqlparse
 
+import sqlparse
 from openai import APIError, OpenAI
 
 # Configure logging
@@ -229,7 +229,7 @@ class DB:
 
 
 class DBMock(DB):
-    def __init__(self, path: Path = '') -> None:
+    def __init__(self, path: Path = ':memory:') -> None:
         super().__init__(path)
 
     def insert(self, obj):
@@ -471,7 +471,7 @@ def process_file(path: Path, params: Params):
 def main():
     args = parse_args()
     db = DB(args.output_db) if args.output_db else DBMock()
-    ai = AI(args.output_db) if args.api_key else AIMock()
+    ai = AI(args.api_key) if args.api_key else AIMock()
     needs = tuple(args.needs)
     experiments = args.experiments
     params = Params(ai, db, needs, experiments)
