@@ -1,5 +1,7 @@
+import argparse
 import csv
 import random
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -42,7 +44,6 @@ def ai_mock(table: Table, needed_columns: tuple) -> dict[int | None]:
 
 @dataclass
 class AI:
-
     def request_columns_order(
         self, table: Table, needed_columns: tuple
     ) -> dict[int | None, Any]:
@@ -52,9 +53,26 @@ class AI:
         return table is None
 
 
+class DB:
+    def __init__(self, path: Path) -> None:
+        self._conn = sqlite3.connect(path)
+
+    def insert(self, obj):
+        raise NotImplementedError
+
+
+class DB_mock(DB):
+    def __init__(self) -> None:
+        pass
+
+    def insert(self, obj):
+        print(obj["params"], obj["table"].meta)
+
+
 @dataclass
 class Params:
     ai: AI  # интерфейс к ИИ, если парсеру требуется для внутренней работы
+    db: DB
     # и другое если кому то что то понадобится, расширяемость как никак
 
 
@@ -122,12 +140,26 @@ def parse_data(path: Path, params: Params):
     raise ValueError("Unknown file type")
 
 
-def insret_into_db(obj) -> None:
-    print(obj["params"], obj["table"].meta)
+def parse_args():
+    parser = argparse.ArgumentParser("Leak Parser")
+    parser.add_argument(
+        "-i",
+        "--input_path",
+        type=Path,
+        required=True,
+        help="path to the folder or file containing the data to be parsed.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output_db",
+        type=Path,
+        help="name of the output database where the parsed data will be stored.",
+    )
+    parser.add_argument("-v", "--version", action="version", version="%(prog)s v0.1")
+    return parser.parse_args()
 
 
-def main(path: str):
-    params = Params(AI())
+def process_file(path: Path, params: Params):
     tables = parse_data(Path(path), params)
 
     indexes = [
@@ -153,8 +185,20 @@ def main(path: str):
         )
     ]
     for obj in indexes:
-        insret_into_db(obj)
+        params.db.insert(obj)
+
+
+def main():
+    args = parse_args()
+    db = DB(args.output_db) if args.output_db else DB_mock()
+    params = Params(AI(), db)
+
+    if args.input_path.is_dir():
+        for path in args.input_path.glob("**/*"):
+            process_file(path, params)
+    else:
+        process_file(args.input_path, params)
 
 
 if __name__ == "__main__":
-    main("partselect.ru.csv")
+    main()
