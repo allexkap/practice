@@ -2,13 +2,18 @@ import argparse
 import csv
 import random
 import sqlite3
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, List
+import logging
+import sqlparse
 
 from openai import APIError, OpenAI
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 @dataclass
 class Table:
@@ -24,15 +29,15 @@ class Table:
         ]
         return Table(self.name, sample, self.meta)
 
-    def filtred(self, indexes: list[int]):
+    def filtered(self, indexes: list[int]):
         for row in self.data:
             yield [row[i] for i in indexes]
 
     def __add__(self, rhs: "Table"):
         if (
-            self.name != rhs.name
-            or len(self.data) != len(rhs.data)
-            or self.meta != rhs.meta
+                self.name != rhs.name
+                or len(self.data) != len(rhs.data)
+                or self.meta != rhs.meta
         ):
             raise ValueError("Different tables structure")
         return Table(self.name, self.data + rhs.data, self.meta)
@@ -65,14 +70,16 @@ Here are most common semantical types of columns in databases:
 class AI:
     api_key: str
 
-    def task_request_columns_order(self, headers, csv_string) -> str:
+    @staticmethod
+    def task_request_columns_order(headers, csv_string) -> str:
         return datatypes + (
             f"Here is a CSV file:\n{csv_string}\n"
             f"Find the IDs of columns whose content matches the following headers, and return a single line of column IDs separated by commas (e.g., '0,2,4,'), if no column matches header, return -1 for this header: {headers}. Also use trailing coma\n"
             f"NEVER REPEAT THE ANSWER TWICE or add extra information. For example, this response is error: '-1,0,-1-1,0,-1'"
         )
 
-    def task_request_columns_names(self, csv_string):
+    @staticmethod
+    def task_request_columns_names(csv_string):
         # Write proper prompt to define column names and return tuple of their names
         return datatypes + (
             f"Given the following CSV data: {csv_string}, "
@@ -81,7 +88,8 @@ class AI:
             "return only header row as coma-separated list without spaces or quotes, use trailing coma"
         )
 
-    def task_find_header(self, csv_string: str) -> str:
+    @staticmethod
+    def task_find_header(csv_string: str) -> str:
         return datatypes + (
             f"Analyze the first row of the following CSV data: {csv_string}. "
             "Determine whether this row contains column headers. "
@@ -89,7 +97,8 @@ class AI:
             "return only header row as coma-separated list without spaces or quotes"
         )
 
-    def toCSV(self, table: Table):
+    @staticmethod
+    def toCSV(table: Table):
         csv_data = ""
         for row in table.data:
             csv_data += ",".join(map(str, row)) + "\n"
@@ -100,11 +109,11 @@ class AI:
     # -2 если подходящей колонки нет
 
     def request_columns_order(
-        self, table: Table, needed_columns: tuple
+            self, table: Table, needs: tuple
     ) -> dict[int | None, Any]:
         csv_str = self.toCSV(table)
         # print("Sample:\n", csv_str)
-        prompt = self.task_request_columns_order(needed_columns, csv_str)
+        prompt = self.task_request_columns_order(needs, csv_str)
         # print('\nPrompt:\n', prompt, '\n')
         response = self.request_cloud_model(prompt)
         # print('Model returned:\n', response)
@@ -112,7 +121,7 @@ class AI:
         ids = response.split(",")  # type: ignore
         ids = self.bullshit_crutch_for_duble_response_bug(ids, len(table.data[0]))
 
-        response = {header: int(index) for index, header in zip(ids, needed_columns)}
+        response = {header: int(index) for index, header in zip(ids, needs)}
         # print(response);
         return response
 
@@ -130,7 +139,8 @@ class AI:
 
     # баг - ИИ почему-то иногда возвращает ответ дважды вопреки инструкциям
     # я не смог исправить, так что пусть будет так
-    def bullshit_crutch_for_duble_response_bug(self, items: list, required_headers_len):
+    @staticmethod
+    def bullshit_crutch_for_duble_response_bug(items: list, required_headers_len):
         # print(f"req: {required_headers_len}", f"act: {len(items)}")
         if len(items) > required_headers_len:
             return items[0:required_headers_len]
@@ -165,9 +175,9 @@ class AI:
 
                 # Проверяем, что ответ содержит данные
                 if (
-                    completion
-                    and hasattr(completion, "choices")
-                    and len(completion.choices) > 0
+                        completion
+                        and hasattr(completion, "choices")
+                        and len(completion.choices) > 0
                 ):
                     message = completion.choices[0].message
                     # print(message.content)
@@ -192,12 +202,12 @@ class AI:
             return ""
 
 
-class AI_mock(AI):
+class AIMock(AI):
     def __init__(self) -> None:
         pass
 
     def request_columns_order(
-        self, table: Table, needed_columns: tuple
+            self, table: Table, needed_columns: tuple
     ) -> dict[int | None, Any]:
         return {
             random.randint(0, len(table.meta)): (
@@ -218,9 +228,9 @@ class DB:
         raise NotImplementedError
 
 
-class DB_mock(DB):
-    def __init__(self) -> None:
-        pass
+class DBMock(DB):
+    def __init__(self, path: Path = '') -> None:
+        super().__init__(path)
 
     def insert(self, obj):
         print(obj["params"], obj["table"].meta)
@@ -230,75 +240,164 @@ class DB_mock(DB):
 class Params:
     ai: AI  # интерфейс к ИИ, если парсеру требуется для внутренней работы
     db: DB
-    # и другое если кому то что то понадобится, расширяемость как никак
+    needs: tuple[str]
+    experiments: list[str]
+    encoding: str = "utf-8"
+
+
+def parse_string(string: str):
+    string = string.strip()
+    try:
+        if string[0] in "'\"`":
+            string = string[1:-1]
+    except IndexError:
+        return None
+    if string == "NULL":
+        return None
+    return string
+
+
+def get_table_info(table: List[str]) -> Table:
+    """Extracts table information from a list of SQL INSERT statements.
+
+    Args:
+        table (list[str]): List of SQL INSERT statements.
+
+    Returns:
+        Table: A Table instance with name, data, and metadata.
+    """
+    first_line = table[0].strip()
+    db_name = first_line[len("INSERT INTO"): first_line.find("(")]
+    db_name = parse_string(db_name)
+    meta = first_line[first_line.find("(") + 1: first_line.find(")")]
+    meta = [parse_string(elem) for elem in meta.split(",")]
+    data = table[1:]
+    data = [[*map(parse_string, lines[1:-1].split(","))] for lines in data]
+    return Table(db_name, data, meta)
 
 
 @dataclass
 class Parser:
-    path: Path  # путь к файлу
-    params: Params  # параметры парсера
-    encoding: str = "utf-8"  # кодировка файла
+    """Base class for file parsers.
 
-    def parse_string(self, string: str):
-        string = string.strip()
-        try:
-            if string[0] in "'\"`":
-                string = string[1:-1]
-        except IndexError:
-            return None
-        if string == "NULL":
-            return None
-        return string
+    Attributes:
+        path (Path): Path to the file to parse.
+        params (Params): Parser parameters
+    """
+    def __init__(self, path: Path, params: Params):
+        self.path = path
+        self.params = params
 
     def parse_csv(self) -> list[Table]:
-        with open(self.path, encoding=self.encoding) as file:
+        with open(self.path, encoding=self.params.encoding) as file:
             first_line = file.readline()
             delim = max((first_line.count(d), d) for d in ",;\t")[1]
             file.seek(0)
             reader = csv.reader(file, delimiter=delim)
             meta = list(next(reader))
-            content = [[*map(self.parse_string, lines)] for lines in reader]
+            content = [[*map(parse_string, lines)] for lines in reader]
             result = Table(self.path.name, content, meta)
             if not self.params.ai.request_columns_names(result):
                 result.meta = [str(i) for i in range(len(result.data[0]))]
         return [result]
 
-    def get_table_info(self, table: list[str]) -> Table:
-        first_line = table[0].strip()
-        db_name = first_line[len("INSERT INTO") : first_line.find("(")]
-        db_name = self.parse_string(db_name)
-        meta = first_line[first_line.find("(") + 1 : first_line.find(")")]
-        meta = [self.parse_string(elem) for elem in meta.split(",")]
-        data = table[1:]
-        data = [[*map(self.parse_string, lines[1:-1].split(","))] for lines in data]
-        return Table(db_name, data, meta)  # type: ignore
+    def parse_csv_experimental(self) -> List[Table]:
+        """Method to parse CSV content.
+
+        Returns:
+            list[Table]: A list containing one Table instance.
+
+        Raises:
+            ValueError: If file cannot be read or parsed.
+        """
+        try:
+            with open(self.path, encoding=self.params.encoding) as file:
+                dialect = csv.Sniffer().sniff(file.readline())
+                file.seek(0)
+                reader = csv.reader(file, dialect)
+                meta = list(next(reader))
+                content = [[*map(parse_string, lines)] for lines in reader]
+                result = Table(self.path.name, content, meta)
+                if not self.params.ai.request_columns_names(result):
+                    result.meta = [str(i) for i in range(len(result.data[0]))]
+            return [result]
+        except FileNotFoundError:
+            raise ValueError(f"File not found: {self.path}")
+        except csv.Error as e:
+            raise ValueError(f"CSV parsing error: {e}")
+        except Exception as e:
+            raise ValueError(f"Unexpected error: {e}")
 
     def parse_sql(self) -> list[Table]:
-        with open(self.path, encoding=self.encoding) as file:
+        with open(self.path, encoding=self.params.encoding) as file:
             data = file.readlines()
             table_start_indexes = [
-                i
-                for i, line in enumerate(data)
-                if line.strip().startswith("INSERT INTO")
-            ] + [len(data)]
+                                      i
+                                      for i, line in enumerate(data)
+                                      if line.strip().startswith("INSERT INTO")
+                                  ] + [len(data)]
             tables = [
-                self.get_table_info(data[i:j])
+                get_table_info(data[i:j])
                 for i, j in zip(table_start_indexes, table_start_indexes[1:])
             ]
         return tables
+
+    def parse_sql_experimental(self) -> List[Table]:
+        """Method to parse SQL INSERT statements.
+
+        Returns:
+            list[Table]: A list of Table instances.
+
+        Raises:
+            ValueError: If file cannot be read or parsed.
+        """
+        try:
+            with open(self.path, encoding=self.params.encoding) as file:
+                data = file.read()
+            statements = sqlparse.split(data)
+            tables = []
+            for stmt in statements:
+                parsed = sqlparse.parse(stmt)[0]
+                if parsed.get_type() == "INSERT":
+                    db_name = parsed[2].value.strip()
+                    meta = [t.value for t in parsed[3].tokens if isinstance(t, sqlparse.sql.Identifier)]
+                    values = [v.value.split(",") for v in parsed.tokens[-1].tokens if v.value.startswith("(")]
+                    data = [[parse_string(v.strip()) for v in row] for row in values]
+                    tables.append(Table(db_name, data, meta))
+            return tables
+        except FileNotFoundError:
+            raise ValueError(f"File not found: {self.path}")
+        except Exception as e:
+            raise ValueError(f"SQL parsing error: {e}")
 
 
 def parse_data(path: Path, params: Params):
     parser = Parser(path, params)
     if path.suffix == ".csv":
-        return parser.parse_csv()
+        logging.info(f"Parsing CSV file: {path}")
+        if params.experiments.__contains__('new_csv'):
+            return parser.parse_csv_experimental()
+        else:
+            return parser.parse_csv()
     if path.suffix == ".sql":
-        return parser.parse_sql()
+        logging.info(f"Parsing SQL file: {path}")
+        if params.experiments.__contains__('new_sql'):
+            return parser.parse_sql_experimental()
+        else:
+            return parser.parse_sql()
     raise ValueError("Unknown file type")
 
 
 def parse_args():
-    parser = argparse.ArgumentParser("Leak Parser")
+    parser = argparse.ArgumentParser(
+        description="Parse CSV or SQL files",
+        epilog="Examples:\n"
+               "  python parser.py -i data.csv   # Parse a single CSV file\n"
+               "  python parser.py -i data/      # Parse all CSV/SQL files in a directory\n"
+               "  python parser.py -k API_KEY -i data.csv # Use AI model to detect data type\n"
+               "  python parser.py -k API_KEY -i data.csv -o db  # Collect in DB",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument(
         "-i",
         "--input_path",
@@ -324,7 +423,29 @@ def parse_args():
         action="store_true",
         help="Enable verbose output for detailed logging.",
     )
+    parser.add_argument("--encoding", type=str, default="utf-8", help="File encoding (default: utf-8)")
+    parser.add_argument(
+        "--needs",
+        type=str,
+        nargs="+",
+        default=["LastName", "FirstName", "SecondName", "Email", "PhoneNumber", "HomeAddress", "WorkAddress", "Login",
+                 "Password"],
+        help="List of column names to process"
+    )
+    parser.add_argument(
+        "--experiments",
+        type=str,
+        nargs="+",
+        default=[],
+        help="List of experiments [new_sql, new_cvs]"
+    )
     parser.add_argument("--version", action="version", version="%(prog)s v0.1")
+
+    # Check if no arguments are provided
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
+
     return parser.parse_args()
 
 
@@ -337,17 +458,7 @@ def process_file(path: Path, params: Params):
                 "table": table,
                 "params": params.ai.request_columns_order(
                     table,
-                    needed_columns=(
-                        "LastName",
-                        "FirstName",
-                        "SecondName",
-                        "Email",
-                        "PhoneNumber",
-                        "HomeAdress",
-                        "WorkAdress",
-                        "Login",
-                        "Password",
-                    ),
+                    needs=params.needs,
                 ),
             },
             tables,
@@ -359,11 +470,13 @@ def process_file(path: Path, params: Params):
 
 def main():
     args = parse_args()
-    db = DB(args.output_db) if args.output_db else DB_mock()
-    ai = AI(args.output_db) if args.api_key else AI_mock()
-    params = Params(ai, db)
-
+    db = DB(args.output_db) if args.output_db else DBMock()
+    ai = AI(args.output_db) if args.api_key else AIMock()
+    needs = tuple(args.needs)
+    experiments = args.experiments
+    params = Params(ai, db, needs, experiments)
     if args.input_path.is_dir():
+        logging.info(f"Recursively parsing directory: {args.input_path}")
         for path in args.input_path.glob("**/*"):
             process_file(path, params)
     else:
