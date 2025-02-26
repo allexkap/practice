@@ -357,140 +357,119 @@ class Parser:
             statements = sqlparse.split(data)
             tables = []
 
-            for stmt in statements:
-                parsed = sqlparse.parse(stmt)
-                if not parsed:
+            for statement in statements:
+                # Skip empty statements
+                if not statement.strip():
                     continue
 
-                parsed_stmt = parsed[0]
-                # Check if statement is an INSERT
-                if parsed_stmt.get_type() != "INSERT":
+                parsed = sqlparse.parse(statement)[0]
+
+                # Skip if not an INSERT statement
+                if not parsed.get_type() == 'INSERT':
                     continue
 
-                # Find the table name
-                table_name = None
-                for i, token in enumerate(parsed_stmt.tokens):
-                    if token.ttype is None and token.value.upper() == "INTO":
-                        # Table name should follow the INTO keyword
-                        for j in range(i + 1, len(parsed_stmt.tokens)):
-                            if isinstance(parsed_stmt.tokens[j], Identifier):
-                                table_name = parsed_stmt.tokens[j].get_real_name()
-                                break
-                        if table_name:
-                            break
+                # Create a new Table object
+                table = Table()
 
-                if not table_name:
-                    continue
-
-                # Find column names
-                columns = []
-                for token in parsed_stmt.tokens:
-                    if isinstance(token, Parenthesis):
-                        # First parenthesis after table name should contain column names
-                        col_content = token.value.strip("()")
-                        # Handle quoted identifiers
-                        columns = []
-                        in_quotes = False
-                        quote_char = None
-                        current_col = ""
-
-                        for char in col_content:
-                            if char in ['"', "'"]:
-                                if not in_quotes:
-                                    in_quotes = True
-                                    quote_char = char
-                                elif char == quote_char:
-                                    in_quotes = False
-                                    quote_char = None
-                                current_col += char
-                            elif char == "," and not in_quotes:
-                                columns.append(current_col.strip().strip('"\''))
-                                current_col = ""
-                            else:
-                                current_col += char
-
-                        if current_col:
-                            columns.append(current_col.strip().strip('"\''))
+                # Extract the table name
+                for token in parsed.tokens:
+                    if isinstance(token, sqlparse.sql.Identifier):
+                        # Get the table name without quotes
+                        table.name = token.get_real_name()
                         break
 
-                # Find VALUES token and parse value rows
-                values_section = False
-                values_rows = []
-                current_row = []
-                in_row_parenthesis = False
+                if not table.name:
+                    continue
 
-                for token in parsed_stmt.tokens:
-                    if token.value.upper() == "VALUES":
-                        values_section = True
-                        continue
+                # Extract column names (meta)
+                columns_found = False
+                for token in parsed.tokens:
+                    if isinstance(token, sqlparse.sql.Parenthesis) and not columns_found:
+                        columns_str = token.value.strip('()')
+                        # Extract quoted identifiers
+                        quoted_columns = re.findall(r'"([^"]*)"', columns_str)
+                        if quoted_columns:
+                            table.meta = quoted_columns
+                        else:
+                            # Fallback to simple splitting
+                            table.meta = [col.strip('"\'') for col in columns_str.split(',')]
+                        columns_found = True
+                        break
 
-                    if not values_section:
-                        continue
+                # Extract values
+                table.data = []
+                values_found = False
 
-                    if isinstance(token, Parenthesis) and token.value.startswith("("):
-                        # Parse individual values in this row
-                        row_content = token.value.strip("()")
-                        row_values = []
-                        current_value = ""
-                        in_quotes = False
-                        quote_char = None
+                for token in parsed.tokens:
+                    if isinstance(token, sqlparse.sql.Token) and token.value.upper() == 'VALUES':
+                        values_found = True
+                    elif values_found and isinstance(token, sqlparse.sql.Parenthesis):
+                        # Parse the values for this row
+                        row_values = self.parse_values(token.value.strip('()'))
+                        if row_values:
+                            table.data.append(row_values)
 
-                        for char in row_content:
-                            if char in ['"', "'"]:
-                                if not in_quotes:
-                                    in_quotes = True
-                                    quote_char = char
-                                elif char == quote_char:
-                                    in_quotes = False
-                                    quote_char = None
-                                current_value += char
-                            elif char == "," and not in_quotes:
-                                row_values.append(self._parse_value(current_value.strip()))
-                                current_value = ""
-                            else:
-                                current_value += char
+                tables.append(table)
 
-                        if current_value:
-                            row_values.append(self._parse_value(current_value.strip()))
-
-                        values_rows.append(row_values)
-
-                if table_name and values_rows:
-                    tables.append(Table(table_name, values_rows, columns))
-                return tables
-        except FileNotFoundError:
-            raise ValueError(f"File not found: {self.path}")
+            return tables
         except Exception as e:
-            raise ValueError(f"SQL parsing error: {e}")
+            print(f"Error parsing SQL: {e}")
+            return []
 
     @staticmethod
-    def _parse_value(value_str):
-        """Parse a SQL value into the appropriate Python type."""
-        # Handle NULL values
-        if value_str.upper() == "NULL":
-            return None
+    def parse_values(values_str):
+        """Parse a string of SQL values into a list of Python values.
 
-        # Handle string literals
-        if (value_str.startswith("'") and value_str.endswith("'")) or \
-                (value_str.startswith('"') and value_str.endswith('"')):
-            return value_str[1:-1]
+        Args:
+            values_str: A string containing comma-separated SQL values
 
-        # Handle boolean values
-        if value_str.upper() in ["TRUE", "T"]:
-            return True
-        if value_str.upper() in ["FALSE", "F"]:
-            return False
+        Returns:
+            A list of Python values with appropriate types
+        """
+        values = []
+        current_value = ""
+        in_quotes = False
 
-        # Handle numeric values
-        try:
-            if "." in value_str:
-                return float(value_str)
-            return int(value_str)
-        except ValueError:
-            pass
+        # Split by commas, but respect quotes (handles commas inside quoted strings)
+        for char in values_str:
+            if char == "'" and not in_quotes:
+                in_quotes = True
+                current_value += char
+            elif char == "'" and in_quotes:
+                in_quotes = False
+                current_value += char
+            elif char == ',' and not in_quotes:
+                values.append(current_value.strip())
+                current_value = ""
+            else:
+                current_value += char
 
-        # Return as is for other cases
-        return value_str
+        if current_value:
+            values.append(current_value.strip())
+
+        # Clean up the values and convert to appropriate Python types
+        cleaned_values = []
+        for val in values:
+            val = val.strip()
+            if val.upper() == 'NULL':
+                cleaned_values.append(None)
+            elif val.startswith("'") and val.endswith("'"):
+                cleaned_values.append(val[1:-1])  # Remove the quotes
+            elif val.lower() == 't' or val.lower() == 'true':
+                cleaned_values.append(True)
+            elif val.lower() == 'f' or val.lower() == 'false':
+                cleaned_values.append(False)
+            else:
+                # Try to convert to number if possible
+                try:
+                    if '.' in val:
+                        cleaned_values.append(float(val))
+                    else:
+                        cleaned_values.append(int(val))
+                except ValueError:
+                    cleaned_values.append(val)
+
+        return cleaned_values
 
 
 def parse_data(path: Path, params: Params):
